@@ -4,8 +4,10 @@ import argparse
 import csv
 import json
 import os
+import platform
 import random
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -30,6 +32,8 @@ except Exception:
 
 APP_DIR = Path(__file__).resolve().parent
 WORKSPACE = APP_DIR.parent
+IS_MACOS = sys.platform == "darwin"
+IS_WINDOWS = os.name == "nt"
 DEFAULT_SPRITESHEET_CANDIDATES = [
     APP_DIR / "assets" / "spritesheet.webp",
     Path.home() / ".codex" / "pets" / "patchlet" / "spritesheet.webp",
@@ -68,6 +72,31 @@ ROWS = {
     "running": (7, 6),
     "review": (8, 6),
 }
+
+
+def open_path(path: Path) -> None:
+    if IS_WINDOWS:
+        os.startfile(str(path))  # type: ignore[attr-defined]
+        return
+    if IS_MACOS:
+        subprocess.Popen(["open", str(path)])
+        return
+    subprocess.Popen(["xdg-open", str(path)])
+
+
+def normalize_drop_paths(data: str, root: tk.Tk) -> list[Path]:
+    # TkDND returns a Tcl list. Paths containing spaces are wrapped in braces,
+    # and file:// URLs are common on macOS.
+    out: list[Path] = []
+    for item in root.tk.splitlist(data):
+        text = str(item)
+        if text.startswith("file://"):
+            from urllib.parse import unquote, urlparse
+
+            parsed = urlparse(text)
+            text = unquote(parsed.path)
+        out.append(Path(text))
+    return out
 
 
 @dataclass
@@ -359,10 +388,7 @@ class PatchletApp:
         self.root.configure(bg=TRANSPARENT_KEY)
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
-        try:
-            self.root.wm_attributes("-transparentcolor", TRANSPARENT_KEY)
-        except tk.TclError:
-            self.root.attributes("-alpha", 0.96)
+        self.configure_transparency(self.root)
 
         self.scale = 0.78
         self.stage_paths = locate_stage_spritesheets()
@@ -428,9 +454,26 @@ class PatchletApp:
 
         self.bind_events()
         self.place_initially()
-        self.show_bubble("把文档扔到我身上，我来读。", ms=4200)
+        if DND_AVAILABLE:
+            self.show_bubble("把文档扔到我身上，我来读。", ms=4200)
+        else:
+            self.show_bubble("拖拽组件没装好时，可以右键选文件给我读。", ms=5200)
         self.root.after(90, self.animate)
         self.root.after(90, self.wander)
+
+    def configure_transparency(self, window: tk.Tk | tk.Toplevel) -> None:
+        if IS_WINDOWS:
+            try:
+                window.wm_attributes("-transparentcolor", TRANSPARENT_KEY)
+                return
+            except tk.TclError:
+                pass
+        if IS_MACOS:
+            try:
+                window.wm_attributes("-transparent", True)
+            except tk.TclError:
+                pass
+        window.attributes("-alpha", 0.96)
 
     def load_sprites(self, spritesheet: Path) -> dict[str, list[ImageTk.PhotoImage]]:
         atlas = Image.open(spritesheet).convert("RGBA")
@@ -458,6 +501,8 @@ class PatchletApp:
             widget.bind("<B1-Motion>", self.drag)
             widget.bind("<ButtonRelease-1>", self.end_drag)
             widget.bind("<Button-3>", self.show_menu)
+            widget.bind("<Button-2>", self.show_menu)
+            widget.bind("<Control-Button-1>", self.show_menu)
             widget.bind("<Double-Button-1>", lambda _event: self.set_state("waving", 1200))
         if DND_AVAILABLE:
             for widget in (self.root, self.label):
@@ -497,7 +542,7 @@ class PatchletApp:
 
     def open_last_report(self) -> None:
         if self.last_report and self.last_report.is_file():
-            os.startfile(str(self.last_report))
+            open_path(self.last_report)
         else:
             messagebox.showinfo("小补丁", "还没有读过文件。")
 
@@ -517,7 +562,7 @@ class PatchletApp:
         self.dragging = False
 
     def on_drop(self, event: tk.Event) -> None:
-        paths = [Path(item) for item in self.root.tk.splitlist(event.data)]
+        paths = normalize_drop_paths(event.data, self.root)
         files = [path for path in paths if path.is_file()]
         if not files:
             self.show_bubble("这次没有接到文件。", ms=2400)
@@ -706,6 +751,7 @@ def run_self_test() -> None:
             "ok": True,
             "spritesheet": str(sheet),
             "dnd_available": DND_AVAILABLE,
+            "platform": platform.platform(),
             "sample_report": str(summary.report_path),
             "sample_title": summary.title,
         },
