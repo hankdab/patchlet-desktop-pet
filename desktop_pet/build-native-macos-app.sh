@@ -15,6 +15,8 @@ mkdir -p "$MACOS" "$RESOURCES/assets"
 
 swiftc macos/PatchletNative.swift -o "$MACOS/$APP_NAME" -framework AppKit -framework ImageIO
 cp assets/*.webp "$RESOURCES/assets/"
+cp assets/*.png "$RESOURCES/assets/" 2>/dev/null || true
+cp macos/icons/PatchletPaw.icns "$RESOURCES/PatchletPaw.icns"
 
 cat > "$CONTENTS/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -27,6 +29,8 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
   <string>run.crafter.patchlet.native</string>
   <key>CFBundleName</key>
   <string>Patchlet Native</string>
+  <key>CFBundleIconFile</key>
+  <string>PatchletPaw</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>

@@ -6,9 +6,11 @@
 
 - 透明、总在最前的桌面宠物窗口。
 - 沿桌面边缘巡逻，左右移动会播放对应方向的跑步动画。
+- Native macOS 版本会沿屏幕四边移动，并在左右边缘使用上下方向的专用动画。
 - 坐着或等待时保持原地不动。
 - 跑动时半透明，鼠标靠近后恢复不透明。
 - 支持拖入文档文件并读取摘要；macOS 上拖拽不可用时可用右键菜单选择文件。
+- Native macOS 版本支持任务完成信号，收到后播放系统喵声。
 - 绕桌面跑完一圈进化，再跑完一圈进入终极进化。
 
 ## 运行
@@ -32,8 +34,58 @@ macOS:
 open dist/Patchlet.app
 ```
 
+Native macOS app:
+
+```bash
+./build-native-macos-app.sh
+open dist/PatchletNative.app
+```
+
+Native 版本使用 Swift/AppKit 编译，运行时不需要 Python 虚拟环境。它当前负责无边框浮窗、边缘巡逻、方向动画和任务完成喵声；文档拖拽摘要仍由 Python/Tk 版本提供。
+
+## 任务完成喵声
+
+Native macOS app 会监听这个信号文件的修改时间：
+
+```text
+~/Library/Application Support/Patchlet/task-complete.signal
+```
+
+任务结束时运行：
+
+```bash
+./signal-task-complete.sh
+```
+
+脚本会创建 `~/Library/Application Support/Patchlet/`，更新 `task-complete.signal`，正在运行的 Native app 检测到更新后会播放系统 `Purr.aiff`。如果该音效不可用，会回退到系统内置音效或 beep。
+
+## 边缘巡逻与进化
+
+Python/Tk 版本使用屏幕边缘作为巡逻路径：底边、左边、顶边、右边依次移动，回到底边算完成一圈。完成第 1 圈后切换到 `evolved` 阶段，完成第 2 圈后切换到 `ultimate` 阶段；如果阶段资源不存在，会继续使用当前阶段并显示提示。
+
+Native macOS 版本也会贴着可见屏幕区域巡逻，支持顺时针和逆时针方向，完成一圈后可能短暂停留，并可能随机调头。它使用 `patchlet-edge-directions.png` 提供左右边缘的上/下移动帧，资源缺失时会回退到基础帧。
+
 ## 支持的文件
 
 `.txt`、`.md`、`.json`、`.csv`、`.docx`、`.pdf`、`.xlsx`、`.xlsm`
 
 摘要报告会写入 `reports/`，该目录默认不提交。
+
+## 资源文件
+
+```text
+assets/
+  spritesheet.webp              # 基础阶段图集，192 x 208 单元格
+  patchlet-evolved.webp         # 第 1 圈后的进化阶段图集
+  patchlet-ultimate.webp        # 第 2 圈后的终极阶段图集
+  patchlet-edge-directions.png          # Native 基础阶段左右边缘上下移动图集，208 x 192 单元格
+  patchlet-edge-directions-evolved.png  # Native 进化阶段左右边缘上下移动图集
+  patchlet-edge-directions-ultimate.png # Native 终极阶段左右边缘上下移动图集
+macos/
+  PatchletNative.swift          # Native macOS App 入口
+  icons/PatchletPaw.icns        # Native macOS App 图标
+scripts/
+  generate-edge-directions.py   # 生成边缘方向图集的辅助脚本
+```
+
+Python/Tk 版本优先读取打包资源，其次读取源码目录和 `~/.codex/pets/` 下的孵化结果。Native macOS 构建会把 `assets/*.webp` 和 `PatchletPaw.icns` 复制进 `dist/PatchletNative.app/Contents/Resources/`。
