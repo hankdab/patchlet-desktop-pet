@@ -15,7 +15,7 @@ import zipfile
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from tempfile import gettempdir
+from tempfile import gettempdir, mkdtemp
 from tkinter import filedialog, messagebox
 import tkinter as tk
 
@@ -83,6 +83,7 @@ STAGE_LABELS = {
 }
 REPORTS_DIR = (app_data_dir() if IS_FROZEN else SOURCE_DIR) / "reports"
 TRANSPARENT_KEY = "#ff00ff"
+MACOS_WINDOW_BG = "#ffd166"
 CELL_WIDTH = 192
 CELL_HEIGHT = 208
 ROWS = {
@@ -409,8 +410,9 @@ class PatchletApp:
         root_cls = TkinterDnD.Tk if DND_AVAILABLE else tk.Tk
         self.root = root_cls()
         self.root.title("小补丁")
-        self.root.configure(bg=TRANSPARENT_KEY)
-        self.root.overrideredirect(True)
+        self.window_bg = MACOS_WINDOW_BG if IS_MACOS else TRANSPARENT_KEY
+        self.root.configure(bg=self.window_bg)
+        self.root.overrideredirect(False if IS_MACOS else True)
         self.root.attributes("-topmost", True)
         self.configure_transparency(self.root)
 
@@ -418,6 +420,7 @@ class PatchletApp:
         self.stage_paths = locate_stage_spritesheets()
         if spritesheet:
             self.stage_paths["base"] = spritesheet
+        self.temp_frame_dir: Path | None = Path(mkdtemp(prefix="patchlet-frames-")) if IS_MACOS else None
         self.stage_order = ["base", "evolved", "ultimate"]
         self.stage_index = 0
         self.stage_name = self.stage_order[self.stage_index]
@@ -447,13 +450,27 @@ class PatchletApp:
         self.hover_margin = 90
 
         first_image = self.sprites["idle"][0]
-        self.label = tk.Label(self.root, image=first_image, bg=TRANSPARENT_KEY, bd=0, highlightthickness=0)
-        self.label.pack()
+        if IS_MACOS:
+            self.label = tk.Canvas(
+                self.root,
+                width=first_image.width(),
+                height=first_image.height(),
+                bg=MACOS_WINDOW_BG,
+                bd=0,
+                highlightthickness=0,
+            )
+            self.label.create_rectangle(0, 0, first_image.width(), first_image.height(), fill=MACOS_WINDOW_BG, outline=MACOS_WINDOW_BG)
+            self.sprite_item = self.label.create_image(0, 0, image=first_image, anchor="nw")
+            self.label.create_text(10, 18, text="Patchlet", fill="#2b2b2b", anchor="w", font=("Helvetica", 14, "bold"))
+        else:
+            self.label = tk.Label(self.root, image=first_image, bg=self.window_bg, bd=0, highlightthickness=0)
+            self.sprite_item = None
+        self.label.pack(fill="both", expand=True)
         self.root.geometry(f"{first_image.width()}x{first_image.height()}+{self.x}+{self.y}")
 
         self.bubble = tk.Toplevel(self.root)
         self.bubble.withdraw()
-        self.bubble.overrideredirect(True)
+        self.bubble.overrideredirect(False if IS_MACOS else True)
         self.bubble.attributes("-topmost", True)
         self.bubble.configure(bg="#202124")
         self.bubble_label = tk.Label(
@@ -478,7 +495,10 @@ class PatchletApp:
 
         self.bind_events()
         self.place_initially()
-        if DND_AVAILABLE:
+        self.root.after(250, self.raise_window)
+        if IS_MACOS:
+            pass
+        elif DND_AVAILABLE:
             self.show_bubble("把文档扔到我身上，我来读。", ms=4200)
         else:
             self.show_bubble("拖拽组件没装好时，可以右键选文件给我读。", ms=5200)
@@ -493,15 +513,20 @@ class PatchletApp:
             except tk.TclError:
                 pass
         if IS_MACOS:
-            try:
-                window.wm_attributes("-transparent", True)
-            except tk.TclError:
-                pass
+            window.attributes("-alpha", 1.0)
+            return
         window.attributes("-alpha", 0.96)
 
-    def load_sprites(self, spritesheet: Path) -> dict[str, list[ImageTk.PhotoImage]]:
+    def raise_window(self) -> None:
+        self.root.deiconify()
+        self.root.lift()
+        self.root.attributes("-topmost", True)
+        if IS_MACOS:
+            self.root.focus_force()
+
+    def load_sprites(self, spritesheet: Path) -> dict[str, list[tk.PhotoImage | ImageTk.PhotoImage]]:
         atlas = Image.open(spritesheet).convert("RGBA")
-        sprites: dict[str, list[ImageTk.PhotoImage]] = {}
+        sprites: dict[str, list[tk.PhotoImage | ImageTk.PhotoImage]] = {}
         for state, (row, count) in ROWS.items():
             frames = []
             for column in range(count):
@@ -515,7 +540,16 @@ class PatchletApp:
                 width = max(1, round(CELL_WIDTH * self.scale))
                 height = max(1, round(CELL_HEIGHT * self.scale))
                 frame = frame.resize((width, height), Image.Resampling.NEAREST)
-                frames.append(ImageTk.PhotoImage(frame))
+                if IS_MACOS:
+                    background = Image.new("RGBA", frame.size, MACOS_WINDOW_BG)
+                    background.alpha_composite(frame)
+                    frame = background.convert("RGB")
+                    assert self.temp_frame_dir is not None
+                    frame_path = self.temp_frame_dir / f"{spritesheet.stem}-{state}-{column}.ppm"
+                    frame.save(frame_path, format="PPM")
+                    frames.append(tk.PhotoImage(file=str(frame_path)))
+                else:
+                    frames.append(ImageTk.PhotoImage(frame))
             sprites[state] = frames
         return sprites
 
@@ -539,8 +573,12 @@ class PatchletApp:
         height = self.sprites["idle"][0].height()
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
-        self.x = max(0, screen_w - width - 80)
-        self.y = max(0, screen_h - height - 90)
+        if IS_MACOS:
+            self.x = max(0, round((screen_w - width) / 2))
+            self.y = max(0, round((screen_h - height) / 2))
+        else:
+            self.x = max(0, screen_w - width - 80)
+            self.y = max(0, screen_h - height - 90)
         self.edge = "bottom"
         self.root.geometry(f"{width}x{height}+{self.x}+{self.y}")
 
@@ -686,7 +724,11 @@ class PatchletApp:
 
     def animate(self) -> None:
         frames = self.sprites[self.state]
-        self.label.configure(image=frames[self.frame_index % len(frames)])
+        frame = frames[self.frame_index % len(frames)]
+        if IS_MACOS and isinstance(self.label, tk.Canvas):
+            self.label.itemconfigure(self.sprite_item, image=frame)
+        else:
+            self.label.configure(image=frame)
         self.frame_index += 1
         if getattr(self, "state_until", None) and time.monotonic() >= self.state_until:
             self.state_until = None
