@@ -54,8 +54,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var imageView: NSImageView!
     var sprites: [String: [NSImage]] = [:]
     var stateSizes: [String: NSSize] = [:]
-    var stageSprites: [String: [String: [NSImage]]] = [:]
-    var stageSizes: [String: [String: NSSize]] = [:]
     var stageIndex = 0
     var stageName = "base"
     var state = "idle"
@@ -68,13 +66,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var edgeLoops = 0
     var clockwise = true
     var restingUntil: Date?
+    var resourceAssets: URL!
+    var localAssets: URL!
     let edgeStep: CGFloat = 3
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
-        loadStages()
-        sprites = stageSprites["base"] ?? fallbackSprites().sprites
-        stateSizes = stageSizes["base"] ?? fallbackSprites().sizes
+        configureAssetLocations()
+        if let loaded = loadStage("base") {
+            sprites = loaded.sprites
+            stateSizes = loaded.sizes
+        } else {
+            let fallback = fallbackSprites()
+            sprites = fallback.sprites
+            stateSizes = fallback.sizes
+        }
 
         let size = NSSize(width: CGFloat(cellWidth) * scale, height: CGFloat(cellHeight) * scale)
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 100, y: 100, width: 1200, height: 800)
@@ -291,17 +297,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let targetIndex = min(edgeLoops, stageOrder.count - 1)
         guard targetIndex > stageIndex else { return }
         let targetStage = stageOrder[targetIndex]
-        guard stageSprites[targetStage] != nil else { return }
+        guard let loaded = loadStage(targetStage) else { return }
         stageIndex = targetIndex
-        activateStage(targetStage)
+        activateStage(targetStage, loaded: loaded)
         setState("jumping")
     }
 
-    func activateStage(_ stage: String) {
-        guard let nextSprites = stageSprites[stage], let nextSizes = stageSizes[stage] else { return }
+    func activateStage(_ stage: String, loaded: (sprites: [String: [NSImage]], sizes: [String: NSSize])) {
         stageName = stage
-        sprites = nextSprites
-        stateSizes = nextSizes
+        imageView.image = nil
+        sprites.removeAll(keepingCapacity: false)
+        stateSizes.removeAll(keepingCapacity: false)
+        sprites = loaded.sprites
+        stateSizes = loaded.sizes
         if sprites[state] == nil {
             state = "idle"
         }
@@ -344,36 +352,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return dir.appendingPathComponent("task-complete.signal")
     }
 
-    func loadStages() {
+    func configureAssetLocations() {
         let executable = URL(fileURLWithPath: CommandLine.arguments[0])
         let appURL = executable.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let resourceAssets = appURL.appendingPathComponent("Contents/Resources/assets")
-        let localAssets = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("assets")
+        resourceAssets = appURL.appendingPathComponent("Contents/Resources/assets")
+        localAssets = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("assets")
+    }
 
-        for stage in stageOrder {
-            guard
-                let spriteFile = stageSpriteFiles[stage],
-                let spriteURL = assetURL(named: spriteFile, bundledAssets: resourceAssets, localAssets: localAssets),
-                let loaded = loadSprites(spriteURL: spriteURL)
-            else {
-                continue
-            }
-            var stageOut = loaded.sprites
-            var sizesOut = loaded.sizes
-            let edgeFile = stageEdgeFiles[stage] ?? "patchlet-edge-directions.png"
-            let edgeURL = assetURL(named: edgeFile, bundledAssets: resourceAssets, localAssets: localAssets)
-            // Keep evolved/ultimate identity stable. If a stage has no dedicated
-            // edge atlas, fall back to that same stage's idle frame, not base.
-            loadEdgeSprites(from: edgeURL, into: &stageOut, sizes: &sizesOut)
-            stageSprites[stage] = stageOut
-            stageSizes[stage] = sizesOut
+    func loadStage(_ stage: String) -> (sprites: [String: [NSImage]], sizes: [String: NSSize])? {
+        guard
+            let spriteFile = stageSpriteFiles[stage],
+            let spriteURL = assetURL(named: spriteFile, bundledAssets: resourceAssets, localAssets: localAssets),
+            let loaded = loadSprites(spriteURL: spriteURL)
+        else {
+            return nil
         }
-
-        if stageSprites["base"] == nil {
-            let fallback = fallbackSprites()
-            stageSprites["base"] = fallback.sprites
-            stageSizes["base"] = fallback.sizes
-        }
+        var stageOut = loaded.sprites
+        var sizesOut = loaded.sizes
+        let edgeFile = stageEdgeFiles[stage] ?? "patchlet-edge-directions.png"
+        let edgeURL = assetURL(named: edgeFile, bundledAssets: resourceAssets, localAssets: localAssets)
+        // Keep evolved/ultimate identity stable. If a stage has no dedicated
+        // edge atlas, fall back to that same stage's idle frame, not base.
+        loadEdgeSprites(from: edgeURL, into: &stageOut, sizes: &sizesOut)
+        return (stageOut, sizesOut)
     }
 
     func assetURL(named fileName: String, bundledAssets: URL, localAssets: URL) -> URL? {
@@ -414,7 +415,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func loadSprites(spriteURL: URL) -> (sprites: [String: [NSImage]], sizes: [String: NSSize])? {
         guard
-            let source = CGImageSourceCreateWithURL(spriteURL as CFURL, nil),
+            let source = CGImageSourceCreateWithURL(spriteURL as CFURL, [
+                kCGImageSourceShouldCache: false,
+            ] as CFDictionary),
             let atlas = CGImageSourceCreateImageAtIndex(source, 0, nil)
         else {
             return nil
@@ -440,7 +443,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if
             let edgeSpriteURL,
             FileManager.default.fileExists(atPath: edgeSpriteURL.path),
-            let edgeSource = CGImageSourceCreateWithURL(edgeSpriteURL as CFURL, nil),
+            let edgeSource = CGImageSourceCreateWithURL(edgeSpriteURL as CFURL, [
+                kCGImageSourceShouldCache: false,
+            ] as CFDictionary),
             let edgeAtlas = CGImageSourceCreateImageAtIndex(edgeSource, 0, nil)
         {
             for (state, spec) in edgeDirectionRows {
@@ -468,7 +473,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func scaledImage(_ image: CGImage) -> NSImage {
-        NSImage(cgImage: image, size: NSSize(width: CGFloat(image.width) * scale, height: CGFloat(image.height) * scale))
+        let targetWidth = max(1, Int((CGFloat(image.width) * scale).rounded()))
+        let targetHeight = max(1, Int((CGFloat(image.height) * scale).rounded()))
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard
+            let context = CGContext(
+                data: nil,
+                width: targetWidth,
+                height: targetHeight,
+                bitsPerComponent: 8,
+                bytesPerRow: targetWidth * 4,
+                space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            )
+        else {
+            return NSImage(cgImage: image, size: NSSize(width: CGFloat(targetWidth), height: CGFloat(targetHeight)))
+        }
+        context.interpolationQuality = .none
+        context.draw(image, in: CGRect(x: 0, y: 0, width: targetWidth, height: targetHeight))
+        guard let scaled = context.makeImage() else {
+            return NSImage(cgImage: image, size: NSSize(width: CGFloat(targetWidth), height: CGFloat(targetHeight)))
+        }
+        return NSImage(cgImage: scaled, size: NSSize(width: CGFloat(targetWidth), height: CGFloat(targetHeight)))
     }
 
     func maxSize(_ frames: [NSImage]) -> NSSize {
