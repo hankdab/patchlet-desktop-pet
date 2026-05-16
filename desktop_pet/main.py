@@ -15,6 +15,7 @@ import zipfile
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import gettempdir
 from tkinter import filedialog, messagebox
 import tkinter as tk
 
@@ -30,12 +31,33 @@ except Exception:
     DND_AVAILABLE = False
 
 
-APP_DIR = Path(__file__).resolve().parent
-WORKSPACE = APP_DIR.parent
 IS_MACOS = sys.platform == "darwin"
 IS_WINDOWS = os.name == "nt"
+IS_FROZEN = bool(getattr(sys, "frozen", False))
+
+
+def app_resource_dir() -> Path:
+    if IS_FROZEN and IS_MACOS:
+        return Path(sys.executable).resolve().parents[1] / "Resources"
+    if IS_FROZEN:
+        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+    return Path(__file__).resolve().parent
+
+
+def app_data_dir() -> Path:
+    if IS_MACOS:
+        return Path.home() / "Library" / "Application Support" / "Patchlet"
+    if IS_WINDOWS:
+        return Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "Patchlet"
+    return Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "patchlet"
+
+
+APP_DIR = app_resource_dir()
+SOURCE_DIR = Path(__file__).resolve().parent
+WORKSPACE = SOURCE_DIR.parent
 DEFAULT_SPRITESHEET_CANDIDATES = [
     APP_DIR / "assets" / "spritesheet.webp",
+    SOURCE_DIR / "assets" / "spritesheet.webp",
     Path.home() / ".codex" / "pets" / "patchlet" / "spritesheet.webp",
     WORKSPACE / "tmp" / "hatch-pet" / "patchlet" / "final" / "spritesheet.webp",
 ]
@@ -43,11 +65,13 @@ STAGE_SPRITESHEET_CANDIDATES = {
     "base": DEFAULT_SPRITESHEET_CANDIDATES,
     "evolved": [
         APP_DIR / "assets" / "patchlet-evolved.webp",
+        SOURCE_DIR / "assets" / "patchlet-evolved.webp",
         WORKSPACE / "tmp" / "hatch-pet" / "patchlet-evolved" / "final" / "spritesheet.webp",
         Path.home() / ".codex" / "pets" / "patchlet-evolved" / "spritesheet.webp",
     ],
     "ultimate": [
         APP_DIR / "assets" / "patchlet-ultimate.webp",
+        SOURCE_DIR / "assets" / "patchlet-ultimate.webp",
         WORKSPACE / "tmp" / "hatch-pet" / "patchlet-ultimate" / "final" / "spritesheet.webp",
         Path.home() / ".codex" / "pets" / "patchlet-ultimate" / "spritesheet.webp",
     ],
@@ -57,7 +81,7 @@ STAGE_LABELS = {
     "evolved": "进化小补丁",
     "ultimate": "终极小补丁",
 }
-REPORTS_DIR = APP_DIR / "reports"
+REPORTS_DIR = (app_data_dir() if IS_FROZEN else SOURCE_DIR) / "reports"
 TRANSPARENT_KEY = "#ff00ff"
 CELL_WIDTH = 192
 CELL_HEIGHT = 208
@@ -743,7 +767,17 @@ def run_self_test() -> None:
     sheet = locate_spritesheet()
     with Image.open(sheet) as image:
         assert image.size == (1536, 1872), image.size
-    sample = APP_DIR / "README.md"
+    sample = SOURCE_DIR / "README.md"
+    if not sample.is_file():
+        sample = Path(gettempdir()) / "patchlet-self-test.md"
+        sample.write_text(
+            "# 小补丁桌面宠物\n\n"
+            "这是一个用于验证打包版本文档摘要功能的临时文件。"
+            "它会确认 spritesheet 能被读取，报告目录可以写入，"
+            "并且 Markdown 文本能够被摘要流程正常处理。"
+            "如果这段文字能生成报告，说明 macOS app bundle 的基本资源路径可用。",
+            encoding="utf-8",
+        )
     summary = summarize_document(sample)
     assert summary.characters > 100
     print(json.dumps(

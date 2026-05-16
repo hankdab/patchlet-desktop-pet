@@ -6,6 +6,10 @@ venv/
 env/
 
 desktop_pet/reports/
+desktop_pet/.venv-build/
+desktop_pet/Patchlet.spec
+desktop_pet/build/
+desktop_pet/dist/
 tmp/
 
 .env
