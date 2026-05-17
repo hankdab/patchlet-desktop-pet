@@ -5,6 +5,7 @@ let cellWidth = 192
 let cellHeight = 208
 let edgeCellWidth = 208
 let edgeCellHeight = 192
+let edgeFrameCount = 12
 let scale: CGFloat = 0.45
 let stateRows: [String: (row: Int, frames: Int)] = [
     "idle": (0, 6),
@@ -18,10 +19,10 @@ let stateRows: [String: (row: Int, frames: Int)] = [
     "review": (8, 6),
 ]
 let edgeDirectionRows: [String: (row: Int, frames: Int)] = [
-    "running-down-right-edge": (0, 8),
-    "running-up-right-edge": (1, 8),
-    "running-down-left-edge": (2, 8),
-    "running-up-left-edge": (3, 8),
+    "running-down-right-edge": (0, edgeFrameCount),
+    "running-up-right-edge": (1, edgeFrameCount),
+    "running-down-left-edge": (2, edgeFrameCount),
+    "running-up-left-edge": (3, edgeFrameCount),
 ]
 final class PatchletWindow: NSWindow {
     override var canBecomeKey: Bool { true }
@@ -114,15 +115,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func advanceFrame(delta: TimeInterval) {
         guard let frames = sprites[state], !frames.isEmpty else { return }
         frameAccumulator += delta
-        guard frameAccumulator >= frameInterval(for: state) else { return }
-        frameAccumulator = 0
+        let interval = frameInterval(for: state)
+        guard frameAccumulator >= interval else { return }
+        frameAccumulator -= interval
         frameIndex = (frameIndex + 1) % frames.count
         imageView.image = frames[frameIndex]
     }
 
     func frameInterval(for state: String) -> TimeInterval {
         if state.contains("-edge") {
-            return 0.10
+            return 0.08
         }
         if state == "running-left" || state == "running-right" {
             return 0.12

@@ -89,7 +89,7 @@ Native macOS 版本当前覆盖这些运动和反馈状态：
 ```text
 assets/
   spritesheet.webp              # 单形态基础图集，192 x 208 单元格
-  patchlet-edge-directions.png  # Native 单形态左右边缘上下移动图集，208 x 192 单元格
+  patchlet-edge-directions.png  # Native 单形态左右边缘上下移动图集，208 x 192 单元格，每行 12 帧
 macos/
   PatchletNative.swift          # Native macOS App 入口
   icons/PatchletPaw.icns        # Native macOS App 图标

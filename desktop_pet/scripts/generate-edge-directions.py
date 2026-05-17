@@ -16,8 +16,8 @@ DEFAULT_CONTACT = Path("/tmp/patchlet-edge-directions-contact.png")
 CELL_W = 208
 CELL_H = 192
 ROWS = 4
-COLS = 8
-BOB_OFFSETS = [0, -3, -5, -2, 0, 3, 5, 2]
+COLS = 12
+BOB_OFFSETS = [0, -2, -4, -5, -3, -1, 0, 2, 4, 5, 3, 1]
 
 
 def chroma_key(cell: Image.Image) -> Image.Image:
