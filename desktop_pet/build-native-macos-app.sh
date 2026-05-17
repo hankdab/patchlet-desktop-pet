@@ -14,8 +14,8 @@ rm -rf "$APP_DIR"
 mkdir -p "$MACOS" "$RESOURCES/assets"
 
 swiftc macos/PatchletNative.swift -o "$MACOS/$APP_NAME" -framework AppKit -framework ImageIO
-cp assets/*.webp "$RESOURCES/assets/"
-cp assets/*.png "$RESOURCES/assets/" 2>/dev/null || true
+cp assets/spritesheet.webp "$RESOURCES/assets/"
+cp assets/patchlet-edge-directions.png "$RESOURCES/assets/"
 cp macos/icons/PatchletPaw.icns "$RESOURCES/PatchletPaw.icns"
 
 cat > "$CONTENTS/Info.plist" <<'PLIST'

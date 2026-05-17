@@ -17,6 +17,7 @@ CELL_W = 208
 CELL_H = 192
 ROWS = 4
 COLS = 8
+BOB_OFFSETS = [0, -3, -5, -2, 0, 3, 5, 2]
 
 
 def chroma_key(cell: Image.Image) -> Image.Image:
@@ -87,6 +88,53 @@ def extract_components(image: Image.Image) -> list[Image.Image]:
     return ordered
 
 
+def extract_row_components(image: Image.Image, expected: int = COLS) -> list[Image.Image]:
+    width, height = image.size
+    pixels = image.load()
+    visited = bytearray(width * height)
+    components: list[tuple[int, int, int, int, int]] = []
+
+    for start_y in range(height):
+        for start_x in range(width):
+            index = start_y * width + start_x
+            if visited[index] or not is_sprite_pixel(pixels[start_x, start_y]):
+                continue
+
+            visited[index] = 1
+            queue: deque[tuple[int, int]] = deque([(start_x, start_y)])
+            min_x = max_x = start_x
+            min_y = max_y = start_y
+            area = 0
+
+            while queue:
+                x, y = queue.popleft()
+                area += 1
+                min_x = min(min_x, x)
+                max_x = max(max_x, x)
+                min_y = min(min_y, y)
+                max_y = max(max_y, y)
+
+                for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                    if nx < 0 or ny < 0 or nx >= width or ny >= height:
+                        continue
+                    nindex = ny * width + nx
+                    if visited[nindex] or not is_sprite_pixel(pixels[nx, ny]):
+                        continue
+                    visited[nindex] = 1
+                    queue.append((nx, ny))
+
+            if area > 600:
+                components.append((min_x, min_y, max_x + 1, max_y + 1, area))
+
+    components = sorted(components, key=lambda item: item[4], reverse=True)[:expected]
+    if len(components) != expected:
+        raise RuntimeError(f"Expected {expected} sprites in row source, found {len(components)}")
+    ordered: list[Image.Image] = []
+    for left, top, right, bottom, _ in sorted(components, key=lambda item: (item[0] + item[2]) / 2):
+        ordered.append(chroma_key(image.crop((left, top, right, bottom))))
+    return ordered
+
+
 def trim(im: Image.Image) -> Image.Image:
     bbox = im.getchannel("A").getbbox()
     if not bbox:
@@ -105,21 +153,53 @@ def remove_hairline(sprite: Image.Image, side: str) -> Image.Image:
     width, height = sprite.size
     zone = range(max(0, width - 24), width) if side == "right" else range(0, min(24, width))
 
+    def is_dark(px: tuple[int, int, int, int]) -> bool:
+        r, g, b, a = px
+        return a > 20 and ((r < 95 and g < 95 and b < 120) or (r > 80 and b > 90 and g < 50))
+
+    def erase_vertical_runs(x: int) -> None:
+        run: list[int] = []
+
+        def flush() -> None:
+            if len(run) < 14:
+                return
+            outer_x = min(width - 1, x + 3) if side == "right" else max(0, x - 3)
+            outside_empty = sum(1 for y in run if alpha.getpixel((outer_x, y)) <= 20)
+            if outside_empty / len(run) < 0.65:
+                return
+            for xx in (x - 1, x, x + 1):
+                if not 0 <= xx < width:
+                    continue
+                for y in run:
+                    if is_dark(pixels[xx, y]):
+                        pixels[xx, y] = (0, 0, 0, 0)
+
+        for y in range(height):
+            if is_dark(pixels[x, y]):
+                run.append(y)
+                continue
+            flush()
+            run = []
+        flush()
+
     for x in zone:
-        count = sum(1 for y in range(height) if alpha.getpixel((x, y)) > 20)
+        opaque_ys = [y for y in range(height) if alpha.getpixel((x, y)) > 20]
+        count = len(opaque_ys)
         if count < 20:
+            erase_vertical_runs(x)
             continue
 
         isolated = 0
-        for y in range(height):
-            if alpha.getpixel((x, y)) <= 20:
-                continue
+        for y in opaque_ys:
             left = alpha.getpixel((max(0, x - 4), y)) if x > 3 else 0
             right = alpha.getpixel((min(width - 1, x + 4), y)) if x < width - 4 else 0
             if left <= 20 and right <= 20:
                 isolated += 1
 
-        if isolated <= 14:
+        dark_count = sum(1 for y in opaque_ys if is_dark(pixels[x, y]))
+        span = max(opaque_ys) - min(opaque_ys) + 1
+        tall_dark_edge = dark_count >= 24 and span >= height * 0.38 and dark_count / max(1, count) >= 0.55
+        if isolated <= 14 and not tall_dark_edge:
             continue
 
         for dx in (-1, 0, 1):
@@ -129,9 +209,9 @@ def remove_hairline(sprite: Image.Image, side: str) -> Image.Image:
             for y in range(height):
                 if alpha.getpixel((xx, y)) <= 20:
                     continue
-                r, g, b, _ = pixels[xx, y]
-                if (r < 95 and g < 95 and b < 120) or (r > 80 and b > 90 and g < 50):
+                if is_dark(pixels[xx, y]):
                     pixels[xx, y] = (0, 0, 0, 0)
+        erase_vertical_runs(x)
 
     return trim(sprite)
 
@@ -148,6 +228,21 @@ def fit_sprite(sprite: Image.Image) -> Image.Image:
 def build_sheet(source: Path, out: Path, contact: Path) -> None:
     image = Image.open(source).convert("RGBA")
     sprites = extract_components(image)
+    write_sheet(sprites, out, contact)
+
+
+def build_sheet_from_rows(row_sources: list[Path], out: Path, contact: Path) -> None:
+    if len(row_sources) != ROWS:
+        raise RuntimeError(f"Expected {ROWS} row sources, got {len(row_sources)}")
+    sprites: list[Image.Image] = []
+    for source in row_sources:
+        sprites.extend(extract_row_components(Image.open(source).convert("RGBA")))
+    write_sheet(sprites, out, contact)
+
+
+def write_sheet(sprites: list[Image.Image], out: Path, contact: Path) -> None:
+    if len(sprites) != ROWS * COLS:
+        raise RuntimeError(f"Expected {ROWS * COLS} sprites, got {len(sprites)}")
     atlas = Image.new("RGBA", (CELL_W * COLS, CELL_H * ROWS), (0, 0, 0, 0))
     preview = Image.new("RGBA", atlas.size, (255, 255, 255, 255))
 
@@ -157,7 +252,8 @@ def build_sheet(source: Path, out: Path, contact: Path) -> None:
             sprite = sprites[row * COLS + col]
             sprite = fit_sprite(remove_hairline(trim(sprite), side))
             x = CELL_W - sprite.width if side == "right" else 0
-            y = round((CELL_H - sprite.height) / 2)
+            y = round((CELL_H - sprite.height) / 2) + BOB_OFFSETS[col]
+            y = max(0, min(CELL_H - sprite.height, y))
             position = (col * CELL_W + x, row * CELL_H + y)
             atlas.alpha_composite(sprite, position)
             preview.alpha_composite(sprite, position)
@@ -170,10 +266,20 @@ def build_sheet(source: Path, out: Path, contact: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Import image-generated edge direction frames.")
     parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
+    parser.add_argument(
+        "--row-source",
+        type=Path,
+        action="append",
+        default=[],
+        help="Use four separate row strip images instead of one 4x8 source. Pass in row order.",
+    )
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--contact", type=Path, default=DEFAULT_CONTACT)
     args = parser.parse_args()
-    build_sheet(args.source, args.out, args.contact)
+    if args.row_source:
+        build_sheet_from_rows(args.row_source, args.out, args.contact)
+    else:
+        build_sheet(args.source, args.out, args.contact)
     print(args.out)
     print(args.contact)
 

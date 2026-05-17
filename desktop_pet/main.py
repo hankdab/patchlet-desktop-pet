@@ -61,26 +61,6 @@ DEFAULT_SPRITESHEET_CANDIDATES = [
     Path.home() / ".codex" / "pets" / "patchlet" / "spritesheet.webp",
     WORKSPACE / "tmp" / "hatch-pet" / "patchlet" / "final" / "spritesheet.webp",
 ]
-STAGE_SPRITESHEET_CANDIDATES = {
-    "base": DEFAULT_SPRITESHEET_CANDIDATES,
-    "evolved": [
-        APP_DIR / "assets" / "patchlet-evolved.webp",
-        SOURCE_DIR / "assets" / "patchlet-evolved.webp",
-        WORKSPACE / "tmp" / "hatch-pet" / "patchlet-evolved" / "final" / "spritesheet.webp",
-        Path.home() / ".codex" / "pets" / "patchlet-evolved" / "spritesheet.webp",
-    ],
-    "ultimate": [
-        APP_DIR / "assets" / "patchlet-ultimate.webp",
-        SOURCE_DIR / "assets" / "patchlet-ultimate.webp",
-        WORKSPACE / "tmp" / "hatch-pet" / "patchlet-ultimate" / "final" / "spritesheet.webp",
-        Path.home() / ".codex" / "pets" / "patchlet-ultimate" / "spritesheet.webp",
-    ],
-}
-STAGE_LABELS = {
-    "base": "小补丁",
-    "evolved": "进化小补丁",
-    "ultimate": "终极小补丁",
-}
 REPORTS_DIR = (app_data_dir() if IS_FROZEN else SOURCE_DIR) / "reports"
 TRANSPARENT_KEY = "#ff00ff"
 MACOS_WINDOW_BG = "#ffd166"
@@ -146,18 +126,6 @@ def locate_spritesheet() -> Path:
             return candidate
     checked = "\n".join(str(path) for path in DEFAULT_SPRITESHEET_CANDIDATES)
     raise FileNotFoundError(f"Could not find Patchlet spritesheet. Checked:\n{checked}")
-
-
-def locate_stage_spritesheets() -> dict[str, Path]:
-    located: dict[str, Path] = {}
-    for stage, candidates in STAGE_SPRITESHEET_CANDIDATES.items():
-        for candidate in candidates:
-            if candidate.is_file():
-                located[stage] = candidate
-                break
-    if "base" not in located:
-        located["base"] = locate_spritesheet()
-    return located
 
 
 def clean_text(text: str) -> str:
@@ -417,18 +385,8 @@ class PatchletApp:
         self.configure_transparency(self.root)
 
         self.scale = 0.78
-        self.stage_paths = locate_stage_spritesheets()
-        if spritesheet:
-            self.stage_paths["base"] = spritesheet
         self.temp_frame_dir: Path | None = Path(mkdtemp(prefix="patchlet-frames-")) if IS_MACOS else None
-        self.stage_order = ["base", "evolved", "ultimate"]
-        self.stage_index = 0
-        self.stage_name = self.stage_order[self.stage_index]
-        self.stage_sprites = {
-            stage: self.load_sprites(path)
-            for stage, path in self.stage_paths.items()
-        }
-        self.sprites = self.stage_sprites[self.stage_name]
+        self.sprites = self.load_sprites(spritesheet)
         self.state = "idle"
         self.frame_index = 0
         self.tick = 0
@@ -660,31 +618,6 @@ class PatchletApp:
         self.frame_index = 0
         self.state_until = time.monotonic() + duration_ms / 1000 if duration_ms else None
 
-    def reload_stage_if_available(self, stage: str) -> bool:
-        if stage in self.stage_sprites:
-            return True
-        paths = locate_stage_spritesheets()
-        path = paths.get(stage)
-        if not path:
-            return False
-        self.stage_paths[stage] = path
-        self.stage_sprites[stage] = self.load_sprites(path)
-        return True
-
-    def evolve_if_ready(self) -> None:
-        target_index = min(self.edge_loops, len(self.stage_order) - 1)
-        if target_index <= self.stage_index:
-            return
-        target_stage = self.stage_order[target_index]
-        if not self.reload_stage_if_available(target_stage):
-            self.show_bubble(f"{STAGE_LABELS[target_stage]}还在孵化，先继续跑。", ms=3200)
-            return
-        self.stage_index = target_index
-        self.stage_name = target_stage
-        self.sprites = self.stage_sprites[target_stage]
-        self.set_state("jumping", 1800)
-        self.show_bubble(f"{STAGE_LABELS[target_stage]}进化完成。", ms=4200)
-
     def move_along_desktop_edge(self, screen_w: int, screen_h: int, width: int, height: int) -> None:
         left = 8
         top = 8
@@ -720,7 +653,6 @@ class PatchletApp:
                 self.y = bottom
                 self.edge = "bottom"
                 self.edge_loops += 1
-                self.evolve_if_ready()
 
     def animate(self) -> None:
         frames = self.sprites[self.state]

@@ -23,23 +23,6 @@ let edgeDirectionRows: [String: (row: Int, frames: Int)] = [
     "running-down-left-edge": (2, 8),
     "running-up-left-edge": (3, 8),
 ]
-let stageOrder = ["base", "evolved", "ultimate"]
-let stageLabels = [
-    "base": "小补丁",
-    "evolved": "进化小补丁",
-    "ultimate": "终极小补丁",
-]
-let stageSpriteFiles = [
-    "base": "spritesheet.webp",
-    "evolved": "patchlet-evolved.webp",
-    "ultimate": "patchlet-ultimate.webp",
-]
-let stageEdgeFiles = [
-    "base": "patchlet-edge-directions.png",
-    "evolved": "patchlet-edge-directions-evolved.png",
-    "ultimate": "patchlet-edge-directions-ultimate.png",
-]
-
 final class PatchletWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
@@ -54,26 +37,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var imageView: NSImageView!
     var sprites: [String: [NSImage]] = [:]
     var stateSizes: [String: NSSize] = [:]
-    var stageIndex = 0
-    var stageName = "base"
     var state = "idle"
     var frameIndex = 0
     var timer: Timer?
     var patrolTimer: Timer?
     var triggerTimer: Timer?
     var lastTriggerDate: Date?
+    var frameAccumulator: TimeInterval = 0
     var edge = "bottom"
     var edgeLoops = 0
     var clockwise = true
     var restingUntil: Date?
     var resourceAssets: URL!
     var localAssets: URL!
-    let edgeStep: CGFloat = 3
+    var currentScreenIndex = 0
+    let edgeStep: CGFloat = 2.4
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         configureAssetLocations()
-        if let loaded = loadStage("base") {
+        currentScreenIndex = preferredScreenIndex()
+        if var loaded = loadSprites() {
+            loadEdgeSprites(into: &loaded.sprites, sizes: &loaded.sizes)
             sprites = loaded.sprites
             stateSizes = loaded.sizes
         } else {
@@ -83,8 +68,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let size = NSSize(width: CGFloat(cellWidth) * scale, height: CGFloat(cellHeight) * scale)
-        let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 100, y: 100, width: 1200, height: 800)
-        let origin = NSPoint(x: screen.midX - size.width / 2, y: screen.midY - size.height / 2)
+        let screen = currentScreenFrame()
+        let origin = NSPoint(x: screen.maxX - size.width - 24, y: screen.minY + 8)
 
         window = PatchletWindow(
             contentRect: NSRect(origin: origin, size: size),
@@ -110,10 +95,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
-        timer = Timer.scheduledTimer(withTimeInterval: 0.16, repeats: true) { [weak self] _ in
-            self?.advanceFrame()
+        timer = Timer.scheduledTimer(withTimeInterval: 0.04, repeats: true) { [weak self] _ in
+            self?.advanceFrame(delta: 0.04)
         }
-        patrolTimer = Timer.scheduledTimer(withTimeInterval: 0.04, repeats: true) { [weak self] _ in
+        patrolTimer = Timer.scheduledTimer(withTimeInterval: 0.035, repeats: true) { [weak self] _ in
             self?.moveAlongScreenEdge()
         }
         lastTriggerDate = taskCompletionSignalDate()
@@ -126,16 +111,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         true
     }
 
-    func advanceFrame() {
+    func advanceFrame(delta: TimeInterval) {
         guard let frames = sprites[state], !frames.isEmpty else { return }
+        frameAccumulator += delta
+        guard frameAccumulator >= frameInterval(for: state) else { return }
+        frameAccumulator = 0
         frameIndex = (frameIndex + 1) % frames.count
         imageView.image = frames[frameIndex]
+    }
+
+    func frameInterval(for state: String) -> TimeInterval {
+        if state.contains("-edge") {
+            return 0.10
+        }
+        if state == "running-left" || state == "running-right" {
+            return 0.12
+        }
+        if state == "idle" {
+            return 0.18
+        }
+        return 0.14
     }
 
     func setState(_ newState: String) {
         if state != newState {
             state = newState
             frameIndex = 0
+            frameAccumulator = 0
             applyStateGeometry()
         }
     }
@@ -156,7 +158,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func moveAlongScreenEdge() {
-        guard let screen = NSScreen.main?.visibleFrame else { return }
         if let until = restingUntil {
             if Date() < until {
                 setState("idle")
@@ -164,6 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             restingUntil = nil
         }
+        let screen = currentScreenFrame()
         var frame = window.frame
         let left = screen.minX + 8
         let bottom = screen.minY + 8
@@ -186,7 +188,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             frame.origin.x -= edgeStep
             if frame.origin.x <= left {
                 frame.origin.x = left
-                edge = "left"
+                if !crossToAdjacentScreen(from: screen, side: "left", frame: &frame) {
+                    edge = "left"
+                }
             }
         case "left":
             setState("running-up-left-edge")
@@ -207,7 +211,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             frame.origin.x += edgeStep
             if frame.origin.x >= right {
                 frame.origin.x = right
-                edge = "right"
+                if !crossToAdjacentScreen(from: screen, side: "right", frame: &frame) {
+                    edge = "right"
+                }
             }
         default:
             setState("running-down-right-edge")
@@ -233,7 +239,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             frame.origin.x += edgeStep
             if frame.origin.x >= right {
                 frame.origin.x = right
-                edge = "right"
+                if !crossToAdjacentScreen(from: screen, side: "right", frame: &frame) {
+                    edge = "right"
+                }
             }
         case "right":
             setState("running-up-right-edge")
@@ -254,7 +262,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             frame.origin.x -= edgeStep
             if frame.origin.x <= left {
                 frame.origin.x = left
-                edge = "left"
+                if !crossToAdjacentScreen(from: screen, side: "left", frame: &frame) {
+                    edge = "left"
+                }
             }
         default:
             setState("running-down-left-edge")
@@ -283,7 +293,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func completeLoop() {
         edgeLoops += 1
-        evolveIfReady()
         if Double.random(in: 0..<1) < 1.0 / 3.0 {
             restingUntil = Date().addingTimeInterval(Double.random(in: 4.0...8.0))
             setState("idle")
@@ -293,28 +302,84 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func evolveIfReady() {
-        let targetIndex = min(edgeLoops, stageOrder.count - 1)
-        guard targetIndex > stageIndex else { return }
-        let targetStage = stageOrder[targetIndex]
-        guard let loaded = loadStage(targetStage) else { return }
-        stageIndex = targetIndex
-        activateStage(targetStage, loaded: loaded)
-        setState("jumping")
+    func patrolScreens() -> [NSRect] {
+        let screens = NSScreen.screens.map(\.visibleFrame)
+        guard !screens.isEmpty else {
+            return [NSRect(x: 100, y: 100, width: 1200, height: 800)]
+        }
+        return screens.sorted { lhs, rhs in
+            if lhs.minX == rhs.minX {
+                return lhs.minY < rhs.minY
+            }
+            return lhs.minX < rhs.minX
+        }
     }
 
-    func activateStage(_ stage: String, loaded: (sprites: [String: [NSImage]], sizes: [String: NSSize])) {
-        stageName = stage
-        imageView.image = nil
-        sprites.removeAll(keepingCapacity: false)
-        stateSizes.removeAll(keepingCapacity: false)
-        sprites = loaded.sprites
-        stateSizes = loaded.sizes
-        if sprites[state] == nil {
-            state = "idle"
+    func currentScreenFrame() -> NSRect {
+        let screens = patrolScreens()
+        if currentScreenIndex >= screens.count {
+            currentScreenIndex = 0
         }
-        applyStateGeometry()
-        imageView?.image = sprites[state]?.first
+        return screens[currentScreenIndex]
+    }
+
+    func mainScreenIndex() -> Int {
+        guard let mainFrame = NSScreen.main?.visibleFrame else { return 0 }
+        return patrolScreens().firstIndex { frame in
+            abs(frame.minX - mainFrame.minX) < 1
+                && abs(frame.minY - mainFrame.minY) < 1
+                && abs(frame.width - mainFrame.width) < 1
+                && abs(frame.height - mainFrame.height) < 1
+        } ?? 0
+    }
+
+    func preferredScreenIndex() -> Int {
+        let screens = patrolScreens()
+        let mouseLocation = NSEvent.mouseLocation
+        if let index = screens.firstIndex(where: { $0.contains(mouseLocation) }) {
+            return index
+        }
+        return mainScreenIndex()
+    }
+
+    func crossToAdjacentScreen(from screen: NSRect, side: String, frame: inout NSRect) -> Bool {
+        let screens = patrolScreens()
+        guard screens.count > 1 else { return false }
+        let overlapTolerance: CGFloat = 80
+        let candidates = screens.enumerated().filter { index, candidate in
+            guard index != currentScreenIndex else { return false }
+            let verticallyConnected = candidate.maxY >= screen.minY + overlapTolerance
+                && candidate.minY <= screen.maxY - overlapTolerance
+            if side == "left" {
+                return verticallyConnected && candidate.maxX <= screen.minX + 1
+            }
+            return verticallyConnected && candidate.minX >= screen.maxX - 1
+        }
+        guard let target = candidates.min(by: { lhs, rhs in
+            let lhsDistance = abs(lhs.element.midX - screen.midX)
+            let rhsDistance = abs(rhs.element.midX - screen.midX)
+            return lhsDistance < rhsDistance
+        }) else {
+            return false
+        }
+
+        currentScreenIndex = target.offset
+        let targetScreen = target.element
+        let normalizedY = (frame.midY - screen.minY) / max(1, screen.height)
+        let targetCenterY = targetScreen.minY + normalizedY * targetScreen.height
+        frame.origin.y = min(
+            max(targetScreen.minY + 8, targetCenterY - frame.height / 2),
+            topEdge(for: frame, in: targetScreen)
+        )
+
+        if side == "left" {
+            frame.origin.x = rightEdge(for: frame, in: targetScreen)
+            setState("running-left")
+        } else {
+            frame.origin.x = targetScreen.minX + 8
+            setState("running-right")
+        }
+        return true
     }
 
     func checkTaskCompletionTrigger() {
@@ -359,22 +424,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         localAssets = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("assets")
     }
 
-    func loadStage(_ stage: String) -> (sprites: [String: [NSImage]], sizes: [String: NSSize])? {
+    func loadSprites() -> (sprites: [String: [NSImage]], sizes: [String: NSSize])? {
         guard
-            let spriteFile = stageSpriteFiles[stage],
-            let spriteURL = assetURL(named: spriteFile, bundledAssets: resourceAssets, localAssets: localAssets),
-            let loaded = loadSprites(spriteURL: spriteURL)
+            let spriteURL = assetURL(named: "spritesheet.webp", bundledAssets: resourceAssets, localAssets: localAssets),
+            let source = CGImageSourceCreateWithURL(spriteURL as CFURL, [
+                kCGImageSourceShouldCache: false,
+            ] as CFDictionary),
+            let atlas = CGImageSourceCreateImageAtIndex(source, 0, nil)
         else {
             return nil
         }
-        var stageOut = loaded.sprites
-        var sizesOut = loaded.sizes
-        let edgeFile = stageEdgeFiles[stage] ?? "patchlet-edge-directions.png"
-        let edgeURL = assetURL(named: edgeFile, bundledAssets: resourceAssets, localAssets: localAssets)
-        // Keep evolved/ultimate identity stable. If a stage has no dedicated
-        // edge atlas, fall back to that same stage's idle frame, not base.
-        loadEdgeSprites(from: edgeURL, into: &stageOut, sizes: &sizesOut)
-        return (stageOut, sizesOut)
+
+        var out: [String: [NSImage]] = [:]
+        var sizes: [String: NSSize] = [:]
+        for (state, spec) in stateRows {
+            var frames: [NSImage] = []
+            for column in 0..<spec.frames {
+                let rect = CGRect(x: column * cellWidth, y: spec.row * cellHeight, width: cellWidth, height: cellHeight)
+                if let cropped = atlas.cropping(to: rect) {
+                    frames.append(scaledImage(cropped))
+                }
+            }
+            out[state] = frames
+            sizes[state] = maxSize(frames)
+        }
+        return (out, sizes)
+    }
+
+    func loadEdgeSprites(into out: inout [String: [NSImage]], sizes: inout [String: NSSize]) {
+        let edgeSpriteURL = assetURL(named: "patchlet-edge-directions.png", bundledAssets: resourceAssets, localAssets: localAssets)
+        if
+            let edgeSpriteURL,
+            FileManager.default.fileExists(atPath: edgeSpriteURL.path),
+            let edgeSource = CGImageSourceCreateWithURL(edgeSpriteURL as CFURL, [
+                kCGImageSourceShouldCache: false,
+            ] as CFDictionary),
+            let edgeAtlas = CGImageSourceCreateImageAtIndex(edgeSource, 0, nil)
+        {
+            for (state, spec) in edgeDirectionRows {
+                var frames: [NSImage] = []
+                for column in 0..<spec.frames {
+                    let rect = CGRect(x: column * edgeCellWidth, y: spec.row * edgeCellHeight, width: edgeCellWidth, height: edgeCellHeight)
+                    if let cropped = edgeAtlas.cropping(to: rect) {
+                        frames.append(scaledImage(cropped))
+                    }
+                }
+                out[state] = frames
+                sizes[state] = maxSize(frames)
+            }
+        } else {
+            for (key, fallbackState) in [
+                ("running-up-left-edge", "idle"),
+                ("running-up-right-edge", "idle"),
+                ("running-down-left-edge", "idle"),
+                ("running-down-right-edge", "idle"),
+            ] {
+                out[key] = out[fallbackState]
+                sizes[key] = sizes[fallbackState]
+            }
+        }
     }
 
     func assetURL(named fileName: String, bundledAssets: URL, localAssets: URL) -> URL? {
@@ -411,65 +519,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             sizes[key] = fallback.size
         }
         return (fallbackFrames, sizes)
-    }
-
-    func loadSprites(spriteURL: URL) -> (sprites: [String: [NSImage]], sizes: [String: NSSize])? {
-        guard
-            let source = CGImageSourceCreateWithURL(spriteURL as CFURL, [
-                kCGImageSourceShouldCache: false,
-            ] as CFDictionary),
-            let atlas = CGImageSourceCreateImageAtIndex(source, 0, nil)
-        else {
-            return nil
-        }
-
-        var out: [String: [NSImage]] = [:]
-        var sizes: [String: NSSize] = [:]
-        for (state, spec) in stateRows {
-            var frames: [NSImage] = []
-            for column in 0..<spec.frames {
-                let rect = CGRect(x: column * cellWidth, y: spec.row * cellHeight, width: cellWidth, height: cellHeight)
-                if let cropped = atlas.cropping(to: rect) {
-                    frames.append(scaledImage(cropped))
-                }
-            }
-            out[state] = frames
-            sizes[state] = maxSize(frames)
-        }
-        return (out, sizes)
-    }
-
-    func loadEdgeSprites(from edgeSpriteURL: URL?, into out: inout [String: [NSImage]], sizes: inout [String: NSSize]) {
-        if
-            let edgeSpriteURL,
-            FileManager.default.fileExists(atPath: edgeSpriteURL.path),
-            let edgeSource = CGImageSourceCreateWithURL(edgeSpriteURL as CFURL, [
-                kCGImageSourceShouldCache: false,
-            ] as CFDictionary),
-            let edgeAtlas = CGImageSourceCreateImageAtIndex(edgeSource, 0, nil)
-        {
-            for (state, spec) in edgeDirectionRows {
-                var frames: [NSImage] = []
-                for column in 0..<spec.frames {
-                    let rect = CGRect(x: column * edgeCellWidth, y: spec.row * edgeCellHeight, width: edgeCellWidth, height: edgeCellHeight)
-                    if let cropped = edgeAtlas.cropping(to: rect) {
-                        frames.append(scaledImage(cropped))
-                    }
-                }
-                out[state] = frames
-                sizes[state] = maxSize(frames)
-            }
-        } else {
-            for (key, fallbackState) in [
-                ("running-up-left-edge", "idle"),
-                ("running-up-right-edge", "idle"),
-                ("running-down-left-edge", "idle"),
-                ("running-down-right-edge", "idle"),
-            ] {
-                out[key] = out[fallbackState]
-                sizes[key] = sizes[fallbackState]
-            }
-        }
     }
 
     func scaledImage(_ image: CGImage) -> NSImage {

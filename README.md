@@ -1,6 +1,6 @@
 # 小补丁桌面宠物
 
-这是一个 Windows / macOS 桌面宠物项目。小补丁会在桌面边缘自由巡逻，支持拖拽文档或选择文档让它读取内容，并会在绕桌面跑完指定圈数后自动进化。
+这是一个 Windows / macOS 桌面宠物项目。小补丁会在桌面边缘自由巡逻，支持拖拽文档或选择文档让它读取内容。当前版本统一为单形态桌宠，不再按圈数切换进化阶段。
 
 ## 分支说明
 
@@ -19,8 +19,6 @@
 - 拖入 `.txt`、`.md`、`.json`、`.csv`、`.docx`、`.pdf`、`.xlsx`、`.xlsm` 后自动读取并生成摘要报告。
 - macOS 可通过右键菜单选择文件；如果本机 `tkinterdnd2`/`tkdnd` 可用，也支持拖入文件。
 - Native macOS 版本可接收任务完成信号，收到后播放系统喵声提示。
-- 跑完第 1 圈进化为带翅膀和电光的进化形态。
-- 跑完第 2 圈进化为身体更长、爪子更锋利、翅膀更大的终极形态。
 
 ## 运行方式
 
@@ -58,7 +56,7 @@ cd desktop_pet
 open dist/PatchletNative.app
 ```
 
-Native 版本会把 WebP 动画资源和 `PatchletPaw.icns` 图标复制进 `.app` 包，窗口为无边框透明浮窗。它目前专注于桌面边缘巡逻、方向动画和任务完成提示，不包含 Python/Tk 版本的文档摘要流程。
+Native 版本会把单形态动画资源和 `PatchletPaw.icns` 图标复制进 `.app` 包，窗口为无边框透明浮窗。它目前专注于桌面边缘巡逻、方向动画和任务完成提示，不包含 Python/Tk 版本的文档摘要流程。
 
 ### 任务完成喵声
 
@@ -97,17 +95,24 @@ macOS 版本复用同一份 Tk/Python 程序。窗口会尽量保持透明、置
 
 原生 Swift/AppKit 版本使用独立入口 `desktop_pet/macos/PatchletNative.swift`，可通过 `build-native-macos-app.sh` 直接编译成 `dist/PatchletNative.app`。它会优先从 `.app` 包内的 `Contents/Resources/assets/` 读取动画资源；如果直接从构建产物运行，也会尝试读取当前目录下的 `assets/`。
 
-## 边缘巡逻与进化阶段
+## 边缘巡逻与形态
 
-Python/Tk 版本启动后会把小补丁放到桌面边缘巡逻：底边向左跑、左边和右边沿边缘移动、顶边向右跑。完成一整圈后 `edge_loops` 增加，并按圈数切换阶段：
+小补丁现在只保留一套形态，使用 `spritesheet.webp` 作为基础动作图集。Python/Tk 版本会在桌面边缘巡逻：底边向左跑、左边和右边沿边缘移动、顶边向右跑，回到底边后只累计圈数，不再触发进化。
 
-- `base`：默认小补丁，使用 `spritesheet.webp`。
-- `evolved`：第 1 圈后尝试切换到 `patchlet-evolved.webp`。
-- `ultimate`：第 2 圈后尝试切换到 `patchlet-ultimate.webp`。
+Native macOS 版本同样是单形态，会围绕可见屏幕边缘巡逻，在四边之间顺时针或逆时针移动，偶尔原地休息，并随机切换巡逻方向。检测到多个显示屏时，如果当前水平移动方向通向相邻显示屏，它会从当前屏幕边缘直接进入相邻屏幕的对应边缘继续移动，不必等跑完整圈。左右边缘使用 `patchlet-edge-directions.png` 中的上下移动帧；如果该资源缺失，会退回到基础帧。
 
-如果对应阶段资源不存在，小补丁会继续用当前阶段巡逻，并提示该阶段还在孵化。
+## 运动状态清单
 
-Native macOS 版本同样围绕可见屏幕边缘巡逻，会在四边之间顺时针或逆时针移动，偶尔原地休息，并随机切换巡逻方向。左右边缘使用 `patchlet-edge-directions.png` 中的上下移动帧；如果该资源缺失，会退回到基础待机帧。
+Native macOS 版本当前覆盖这些运动和反馈状态：
+
+- `idle`：原地待机。
+- `running-left` / `running-right`：沿底边或顶边左右移动。
+- `left-edge up` / `left-edge down`：沿左边缘上下移动。
+- `right-edge up` / `right-edge down`：沿右边缘上下移动。
+- `jumping`：跳跃反馈。
+- `waiting` / `review` / `failed`：等待、审阅和失败反馈。
+- `task completion meow`：收到任务完成信号后播放系统喵声。
+- 多显示屏连续跨屏：沿水平方向跑到相邻显示屏时，直接从一块屏幕进入另一块屏幕继续移动。
 
 ## 项目结构
 
@@ -127,20 +132,14 @@ desktop_pet/
   scripts/
     generate-edge-directions.py # 从基础跑步帧生成边缘方向动画资源
   assets/
-    spritesheet.webp          # 基础形态
-    patchlet-evolved.webp     # 进化形态
-    patchlet-ultimate.webp    # 终极形态
-    patchlet-edge-directions.png # Native 基础阶段边缘上下方向动画
-    patchlet-edge-directions-evolved.png # Native 进化阶段边缘上下方向动画
-    patchlet-edge-directions-ultimate.png # Native 终极阶段边缘上下方向动画
+    spritesheet.webp          # 单形态基础图集
+    patchlet-edge-directions.png # Native 单形态边缘上下方向动画
 ```
 
 文档摘要报告会写入 `desktop_pet/reports/`，该目录不会提交到仓库。
 
 ## 资源文件说明
 
-- `assets/spritesheet.webp`：基础小补丁图集，按 192 x 208 单元格切帧；包含待机、左右跑、挥手、跳跃、失败、阅读等状态。
-- `assets/patchlet-evolved.webp`：进化阶段图集，Python/Tk 版本完成第 1 圈后使用。
-- `assets/patchlet-ultimate.webp`：终极阶段图集，Python/Tk 版本完成第 2 圈后使用。
-- `assets/patchlet-edge-directions*.png`：Native macOS 版本的边缘方向图集，按 208 x 192 单元格切帧；4 行分别对应右边缘向下、右边缘向上、左边缘向下、左边缘向上。基础、进化、终极阶段各有独立图集，避免进化后侧边移动时跳回初级形态。
+- `assets/spritesheet.webp`：单形态小补丁图集，按 192 x 208 单元格切帧；包含待机、左右跑、挥手、跳跃、失败、阅读等状态。
+- `assets/patchlet-edge-directions.png`：Native macOS 单形态版本的边缘方向图集，按 208 x 192 单元格切帧；4 行分别对应右边缘向下、右边缘向上、左边缘向下、左边缘向上。
 - `macos/icons/PatchletPaw.icns`：Native macOS `.app` 图标，由构建脚本复制到 `Contents/Resources/`。
