@@ -133,7 +133,7 @@ desktop_pet/
     generate-edge-directions.py # 从基础跑步帧生成边缘方向动画资源
   assets/
     spritesheet.webp          # 单形态基础图集
-    patchlet-edge-directions.png # Native 单形态边缘上下方向动画，每行 12 帧
+    patchlet-edge-directions.png # Native 单形态边缘上下方向动画，每行 16 帧
 ```
 
 文档摘要报告会写入 `desktop_pet/reports/`，该目录不会提交到仓库。
@@ -141,5 +141,5 @@ desktop_pet/
 ## 资源文件说明
 
 - `assets/spritesheet.webp`：单形态小补丁图集，按 192 x 208 单元格切帧；包含待机、左右跑、挥手、跳跃、失败、阅读等状态。
-- `assets/patchlet-edge-directions.png`：Native macOS 单形态版本的边缘方向图集，按 208 x 192 单元格切帧；4 行分别对应右边缘向下、右边缘向上、左边缘向下、左边缘向上，每行动作 12 帧。
+- `assets/patchlet-edge-directions.png`：Native macOS 单形态版本的边缘方向图集，按 208 x 192 单元格切帧；4 行分别对应右边缘向下、右边缘向上、左边缘向下、左边缘向上，每行动作 16 帧。
 - `macos/icons/PatchletPaw.icns`：Native macOS `.app` 图标，由构建脚本复制到 `Contents/Resources/`。

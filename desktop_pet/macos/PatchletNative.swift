@@ -5,7 +5,7 @@ let cellWidth = 192
 let cellHeight = 208
 let edgeCellWidth = 208
 let edgeCellHeight = 192
-let edgeFrameCount = 12
+let edgeFrameCount = 16
 let scale: CGFloat = 0.45
 let stateRows: [String: (row: Int, frames: Int)] = [
     "idle": (0, 6),
@@ -116,15 +116,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let frames = sprites[state], !frames.isEmpty else { return }
         frameAccumulator += delta
         let interval = frameInterval(for: state)
-        guard frameAccumulator >= interval else { return }
-        frameAccumulator -= interval
-        frameIndex = (frameIndex + 1) % frames.count
+        guard interval > 0 else { return }
+        while frameAccumulator >= interval {
+            frameAccumulator -= interval
+            frameIndex = (frameIndex + 1) % frames.count
+        }
         imageView.image = frames[frameIndex]
     }
 
     func frameInterval(for state: String) -> TimeInterval {
         if state.contains("-edge") {
-            return 0.08
+            return 0.07
         }
         if state == "running-left" || state == "running-right" {
             return 0.12
@@ -141,6 +143,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             frameIndex = 0
             frameAccumulator = 0
             applyStateGeometry()
+            if let firstFrame = sprites[newState]?.first {
+                imageView.image = firstFrame
+            }
         }
     }
 

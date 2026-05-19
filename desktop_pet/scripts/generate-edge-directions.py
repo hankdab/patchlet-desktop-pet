@@ -16,8 +16,8 @@ DEFAULT_CONTACT = Path("/tmp/patchlet-edge-directions-contact.png")
 CELL_W = 208
 CELL_H = 192
 ROWS = 4
-COLS = 12
-BOB_OFFSETS = [0, -2, -4, -5, -3, -1, 0, 2, 4, 5, 3, 1]
+COLS = 16
+BOB_OFFSETS = [0, -1, -3, -5, -6, -4, -2, -1, 0, 1, 3, 5, 6, 4, 2, 1]
 
 
 def chroma_key(cell: Image.Image) -> Image.Image:
@@ -127,12 +127,27 @@ def extract_row_components(image: Image.Image, expected: int = COLS) -> list[Ima
                 components.append((min_x, min_y, max_x + 1, max_y + 1, area))
 
     components = sorted(components, key=lambda item: item[4], reverse=True)[:expected]
-    if len(components) != expected:
-        raise RuntimeError(f"Expected {expected} sprites in row source, found {len(components)}")
+    components = sorted(components, key=lambda item: (item[0] + item[2]) / 2)
+    unclipped = [item for item in components if item[0] > 2 and item[2] < width - 2]
+    if len(unclipped) >= max(8, expected // 2):
+        components = unclipped
     ordered: list[Image.Image] = []
-    for left, top, right, bottom, _ in sorted(components, key=lambda item: (item[0] + item[2]) / 2):
+    for left, top, right, bottom, _ in components:
         ordered.append(chroma_key(image.crop((left, top, right, bottom))))
-    return ordered
+    return normalize_frame_count(ordered, expected)
+
+
+def normalize_frame_count(frames: list[Image.Image], expected: int) -> list[Image.Image]:
+    if len(frames) == expected:
+        return frames
+    if len(frames) < max(8, expected // 2):
+        raise RuntimeError(f"Expected about {expected} sprites in row source, found {len(frames)}")
+    if expected <= 1:
+        return frames[:expected]
+    return [
+        frames[round(index * (len(frames) - 1) / (expected - 1))].copy()
+        for index in range(expected)
+    ]
 
 
 def trim(im: Image.Image) -> Image.Image:
@@ -151,31 +166,49 @@ def remove_hairline(sprite: Image.Image, side: str) -> Image.Image:
     pixels = sprite.load()
     alpha = sprite.getchannel("A")
     width, height = sprite.size
-    zone = range(max(0, width - 24), width) if side == "right" else range(0, min(24, width))
+    edge_zone = min(42, width)
+    zone = range(max(0, width - edge_zone), width) if side == "right" else range(0, edge_zone)
 
     def is_dark(px: tuple[int, int, int, int]) -> bool:
         r, g, b, a = px
         return a > 20 and ((r < 95 and g < 95 and b < 120) or (r > 80 and b > 90 and g < 50))
 
+    def is_line_pixel(px: tuple[int, int, int, int]) -> bool:
+        r, g, b, a = px
+        if a <= 20:
+            return False
+        # Generated guide remnants are usually neutral gray, dark purple, or
+        # pink anti-aliased slivers next to the paws.
+        grayish = max(r, g, b) - min(r, g, b) < 42 and max(r, g, b) < 180
+        purple_sliver = r > 90 and b > 90 and g < 95
+        return is_dark(px) or grayish or purple_sliver
+
     def erase_vertical_runs(x: int) -> None:
         run: list[int] = []
 
         def flush() -> None:
-            if len(run) < 14:
+            if len(run) < 8:
                 return
             outer_x = min(width - 1, x + 3) if side == "right" else max(0, x - 3)
+            inner_x = max(0, x - 4) if side == "right" else min(width - 1, x + 4)
             outside_empty = sum(1 for y in run if alpha.getpixel((outer_x, y)) <= 20)
-            if outside_empty / len(run) < 0.65:
+            inner_support = sum(1 for y in run if alpha.getpixel((inner_x, y)) > 20)
+            at_outer_edge = x >= width - 3 if side == "right" else x <= 2
+            if (
+                outside_empty / len(run) < 0.45
+                and inner_support / len(run) > 0.55
+                and not at_outer_edge
+            ):
                 return
             for xx in (x - 1, x, x + 1):
                 if not 0 <= xx < width:
                     continue
                 for y in run:
-                    if is_dark(pixels[xx, y]):
+                    if is_line_pixel(pixels[xx, y]):
                         pixels[xx, y] = (0, 0, 0, 0)
 
         for y in range(height):
-            if is_dark(pixels[x, y]):
+            if is_line_pixel(pixels[x, y]):
                 run.append(y)
                 continue
             flush()
@@ -209,7 +242,7 @@ def remove_hairline(sprite: Image.Image, side: str) -> Image.Image:
             for y in range(height):
                 if alpha.getpixel((xx, y)) <= 20:
                     continue
-                if is_dark(pixels[xx, y]):
+                if is_line_pixel(pixels[xx, y]):
                     pixels[xx, y] = (0, 0, 0, 0)
         erase_vertical_runs(x)
 
@@ -219,28 +252,34 @@ def remove_hairline(sprite: Image.Image, side: str) -> Image.Image:
 def fit_sprite(sprite: Image.Image) -> Image.Image:
     max_w = CELL_W - 6
     max_h = CELL_H - 6
-    scale = min(1.0, max_w / sprite.width, max_h / sprite.height)
-    if scale >= 1.0:
+    target_h = CELL_H - 22
+    target_w = CELL_W - 18
+    scale = min(max_w / sprite.width, max_h / sprite.height)
+    if sprite.height < target_h and sprite.width < target_w:
+        scale = min(scale, target_h / sprite.height, target_w / sprite.width)
+    else:
+        scale = min(1.0, scale)
+    if abs(scale - 1.0) < 0.01:
         return sprite
     return sprite.resize((round(sprite.width * scale), round(sprite.height * scale)), Image.Resampling.LANCZOS)
 
 
-def build_sheet(source: Path, out: Path, contact: Path) -> None:
+def build_sheet(source: Path, out: Path, contact: Path, clean_guides: bool = False) -> None:
     image = Image.open(source).convert("RGBA")
     sprites = extract_components(image)
-    write_sheet(sprites, out, contact)
+    write_sheet(sprites, out, contact, clean_guides)
 
 
-def build_sheet_from_rows(row_sources: list[Path], out: Path, contact: Path) -> None:
+def build_sheet_from_rows(row_sources: list[Path], out: Path, contact: Path, clean_guides: bool = False) -> None:
     if len(row_sources) != ROWS:
         raise RuntimeError(f"Expected {ROWS} row sources, got {len(row_sources)}")
     sprites: list[Image.Image] = []
     for source in row_sources:
         sprites.extend(extract_row_components(Image.open(source).convert("RGBA")))
-    write_sheet(sprites, out, contact)
+    write_sheet(sprites, out, contact, clean_guides)
 
 
-def write_sheet(sprites: list[Image.Image], out: Path, contact: Path) -> None:
+def write_sheet(sprites: list[Image.Image], out: Path, contact: Path, clean_guides: bool = False) -> None:
     if len(sprites) != ROWS * COLS:
         raise RuntimeError(f"Expected {ROWS * COLS} sprites, got {len(sprites)}")
     atlas = Image.new("RGBA", (CELL_W * COLS, CELL_H * ROWS), (0, 0, 0, 0))
@@ -250,7 +289,12 @@ def write_sheet(sprites: list[Image.Image], out: Path, contact: Path) -> None:
         for col in range(COLS):
             side = "right" if row in (0, 1) else "left"
             sprite = sprites[row * COLS + col]
-            sprite = fit_sprite(remove_hairline(trim(sprite), side))
+            sprite = trim(sprite)
+            if clean_guides:
+                sprite = remove_hairline(sprite, side)
+            sprite = fit_sprite(sprite)
+            if clean_guides:
+                sprite = remove_hairline(sprite, side)
             x = CELL_W - sprite.width if side == "right" else 0
             y = round((CELL_H - sprite.height) / 2) + BOB_OFFSETS[col]
             y = max(0, min(CELL_H - sprite.height, y))
@@ -275,11 +319,16 @@ def main() -> None:
     )
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--contact", type=Path, default=DEFAULT_CONTACT)
+    parser.add_argument(
+        "--clean-edge-guides",
+        action="store_true",
+        help="Remove visible guide-line artifacts from older row sources before writing the atlas.",
+    )
     args = parser.parse_args()
     if args.row_source:
-        build_sheet_from_rows(args.row_source, args.out, args.contact)
+        build_sheet_from_rows(args.row_source, args.out, args.contact, args.clean_edge_guides)
     else:
-        build_sheet(args.source, args.out, args.contact)
+        build_sheet(args.source, args.out, args.contact, args.clean_edge_guides)
     print(args.out)
     print(args.contact)
 
